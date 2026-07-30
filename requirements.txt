@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+yt-dlp
+openai-whisper==20231117
+numpy==1.26.4
+torch==1.13.1+cpu

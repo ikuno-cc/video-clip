@@ -1,0 +1,35 @@
+import os
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = BASE_DIR / "client_dist"
+
+WORKFLOW_URL = os.getenv(
+    "N8N_WORKFLOW_URL",
+    "https://n8n-m4wwkkco4sogkkg0gk0k8og8.20.55.33.27.sslip.io/webhook/7d16e3b6-7fea-4c8b-9464-6b175e2fdb26",
+)
+WORKFLOW_METHOD = os.getenv("N8N_WORKFLOW_METHOD", "POST").strip().upper()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://rwvoskxjwobvukmujpcr.supabase.co").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_00WlDHGbnjQUF8Jqu1NHQw_VE-tyZ4A")
+TRANSCRIPT_SCHEMA = os.getenv("TRANSCRIPT_SCHEMA", "transcript")
+VIDEOS_TABLE = os.getenv("TRANSCRIPT_VIDEOS_TABLE", "videos")
+SEGMENTS_TABLE = os.getenv("TRANSCRIPT_SEGMENTS_TABLE", "segments")
+VIDEOS_URL_COLUMN = os.getenv("TRANSCRIPT_VIDEOS_URL_COLUMN", "url")
+VIDEOS_SOURCE_COLUMN = os.getenv("TRANSCRIPT_VIDEOS_SOURCE_COLUMN", "source")
+SEGMENTS_VIDEO_ID_COLUMN = os.getenv("TRANSCRIPT_VIDEO_ID_COLUMN", "video_id")
+SEGMENTS_ORDER_COLUMN = os.getenv("TRANSCRIPT_ORDER_COLUMN", "segment_number")
+WORKFLOW_TIMEOUT_SECONDS = int(os.getenv("WORKFLOW_TIMEOUT_SECONDS", "300"))
+WORKFLOW_POLL_SECONDS = int(os.getenv("WORKFLOW_POLL_SECONDS", "5"))
+N8N_REQUEST_TIMEOUT_SECONDS = int(os.getenv("N8N_REQUEST_TIMEOUT_SECONDS", "7200"))
+SEGMENTS_WAIT_TIMEOUT_SECONDS = int(os.getenv("SEGMENTS_WAIT_TIMEOUT_SECONDS", "0"))
+WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "tiny")
+WHISPER_MIN_OVERLAP = float(os.getenv("WHISPER_MIN_OVERLAP", "0.72"))
+WHISPER_MIN_MATCH_COUNT = int(os.getenv("WHISPER_MIN_MATCH_COUNT", "6"))
+WHISPER_SELECTION_MIN_SCORE = float(os.getenv("WHISPER_SELECTION_MIN_SCORE", "0.58"))
+WHISPER_SELECTION_PADDING_BEFORE = float(os.getenv("WHISPER_SELECTION_PADDING_BEFORE", "0.00"))
+WHISPER_SELECTION_PADDING_AFTER = float(os.getenv("WHISPER_SELECTION_PADDING_AFTER", "0.00"))
+TRIM_MAX_CONCURRENCY = max(1, int(os.getenv("TRIM_MAX_CONCURRENCY", "2")))
+TRIM_STATUS_TTL_SECONDS = max(60, int(os.getenv("TRIM_STATUS_TTL_SECONDS", "3600")))
+
