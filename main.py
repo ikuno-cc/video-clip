@@ -964,8 +964,11 @@ def cut_audio_endpoint(payload: CutAudioRequest):
     ensure_ffmpeg_available()
     if not payload.audio_url or not payload.audio_url.strip():
         raise HTTPException(status_code=400, detail="audio_url is required.")
-    if payload.end <= payload.start:
-        raise HTTPException(status_code=400, detail="end time must be greater than start time.")
+    if payload.end is None or payload.end <= payload.start:
+        raise HTTPException(
+            status_code=400,
+            detail=f"end time ({payload.end}) must be greater than start time ({payload.start}).",
+        )
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ytaudio_"))
     output_dir = Path(tempfile.gettempdir()) / "ytaudio_outputs"

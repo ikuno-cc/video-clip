@@ -88,23 +88,24 @@ class TranscriptResponse(BaseModel):
 class CutAudioRequest(BaseModel):
     audio_url: str = Field(..., description="URL of the audio or video file to cut")
     start: float = Field(..., ge=0, description="Start time in seconds")
-    end: float = Field(..., ge=0, description="End time in seconds")
+    end: Optional[float] = Field(default=None, ge=0, description="End time in seconds")
+    duration: Optional[float] = Field(default=None, gt=0, description="Duration in seconds (alternative to end time)")
     cookies_base64: Optional[str] = Field(
         default=None,
         description="Optional base64-encoded Netscape cookies.txt content for yt-dlp auth.",
     )
 
-    @field_validator("start", "end", mode="before")
+    @field_validator("start", "end", "duration", mode="before")
     @classmethod
-    def parse_time_input(cls, value: Any) -> float:
+    def parse_time_input(cls, value: Any) -> Optional[float]:
+        if value is None or str(value).strip() == "":
+            return None
         if isinstance(value, (int, float)):
             val = float(value)
             if val < 0:
                 raise ValueError("Timestamp cannot be negative")
             return val
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("Timestamp cannot be empty")
+        text = str(value).strip()
         if ":" in text:
             parts = text.split(":")
             if len(parts) == 3:
@@ -122,8 +123,16 @@ class CutAudioRequest(BaseModel):
         return val
 
     @model_validator(mode="after")
-    def validate_end_after_start(self) -> "CutAudioRequest":
+    def validate_and_compute_end(self) -> "CutAudioRequest":
+        if self.end is None and self.duration is not None:
+            self.end = self.start + self.duration
+        elif self.end is None and self.duration is None:
+            raise ValueError("Either 'end' or 'duration' must be provided.")
+
         if self.end <= self.start:
-            raise ValueError("end time must be greater than start time")
+            raise ValueError(
+                f"end time ({self.end}) must be greater than start time ({self.start}). "
+                f"Check if values are swapped or if 'duration' was passed as 'end'."
+            )
         return self
 
