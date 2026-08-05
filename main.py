@@ -55,6 +55,7 @@ from app.schemas import (
     WorkflowWaitRequest,
     SelectionClipRequest,
     TranscriptResponse,
+    CutAudioRequest,
     TIME_RANGE_PATTERN,
 )
 from app.services.trim_state import TrimState, guarded_call
@@ -639,6 +640,25 @@ def is_direct_media_url(video_url: str) -> bool:
 
 
 def download_direct_media(video_url: str, output_dir: Path) -> Path:
+    if video_url.startswith("file://"):
+        raw_path = urllib_parse.unquote(video_url[7:])
+        local_path = Path(raw_path.lstrip("/"))
+        if not local_path.exists():
+            local_path = Path(raw_path)
+        if local_path.exists():
+            suffix = local_path.suffix or ".mp4"
+            output_path = output_dir / f"source_direct_{uuid.uuid4().hex}{suffix}"
+            shutil.copyfile(local_path, output_path)
+            return output_path
+
+    unquoted_url = urllib_parse.unquote(video_url)
+    if Path(unquoted_url).exists():
+        local_path = Path(unquoted_url)
+        suffix = local_path.suffix or ".mp4"
+        output_path = output_dir / f"source_direct_{uuid.uuid4().hex}{suffix}"
+        shutil.copyfile(local_path, output_path)
+        return output_path
+
     suffix = Path(urllib_parse.urlparse(video_url).path).suffix or ".mp4"
     output_path = output_dir / f"source_direct_{uuid.uuid4().hex}{suffix}"
     request = urllib_request.Request(
@@ -874,6 +894,108 @@ def create_clip(payload: ClipRequest):
         path=str(output_path),
         media_type="video/mp4",
         filename=filename,
+    )
+
+
+def download_audio_source(audio_url: str, output_dir: Path, cookies_base64: Optional[str] = None) -> Path:
+    if is_direct_media_url(audio_url):
+        try:
+            return download_direct_media(audio_url, output_dir)
+        except Exception:
+            pass
+    try:
+        return download_video(audio_url, output_dir, cookies_base64)
+    except Exception:
+        return download_direct_media(audio_url, output_dir)
+
+
+def clip_audio_precise(input_path: Path, output_path: Path, start_seconds: float, end_seconds: float) -> None:
+    if end_seconds <= start_seconds:
+        raise HTTPException(status_code=400, detail="Invalid audio clip range.")
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-ss",
+        format_seconds(start_seconds),
+        "-to",
+        format_seconds(end_seconds),
+        "-vn",
+        "-c:a",
+        "libmp3lame",
+        "-q:a",
+        "2",
+        "-y",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        fallback_command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(input_path),
+            "-ss",
+            format_seconds(start_seconds),
+            "-to",
+            format_seconds(end_seconds),
+            "-vn",
+            "-c:a",
+            "mp3",
+            "-y",
+            str(output_path),
+        ]
+        result = subprocess.run(fallback_command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"ffmpeg audio cut failed: {result.stderr.strip()}")
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise HTTPException(status_code=500, detail="Audio clip file was not created or is empty.")
+
+
+@app.post("/cut-audio")
+@app.post("/cut_audio")
+@app.post("/clip/audio")
+def cut_audio_endpoint(payload: CutAudioRequest):
+    ensure_ffmpeg_available()
+    if not payload.audio_url or not payload.audio_url.strip():
+        raise HTTPException(status_code=400, detail="audio_url is required.")
+    if payload.end <= payload.start:
+        raise HTTPException(status_code=400, detail="end time must be greater than start time.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="ytaudio_"))
+    output_dir = Path(tempfile.gettempdir()) / "ytaudio_outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_filename = f"audio_clip_{uuid.uuid4().hex}.mp3"
+    output_path = output_dir / output_filename
+
+    try:
+        input_media_path = download_audio_source(payload.audio_url, temp_dir, payload.cookies_base64)
+        clip_audio_precise(input_media_path, output_path, payload.start, payload.end)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        msg = str(exc)
+        if "Sign in to confirm you're not a bot" in msg:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "YouTube requires authentication for this video/audio. "
+                    "Set YTDLP_COOKIES_FILE on the server to a valid Netscape cookie file."
+                ),
+            ) from exc
+        raise HTTPException(status_code=500, detail=msg) from exc
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return FileResponse(
+        path=str(output_path),
+        media_type="audio/mpeg",
+        filename=output_filename,
     )
 
 

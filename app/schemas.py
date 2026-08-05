@@ -1,7 +1,7 @@
 import re
-from typing import Optional
+from typing import Optional, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 TIME_RANGE_PATTERN = re.compile(
@@ -83,3 +83,47 @@ class TranscriptResponse(BaseModel):
     duration_seconds: Optional[float] = Field(default=None, ge=0)
     text: str = Field(..., min_length=1)
     segments: list[TranscriptSegment] = Field(default_factory=list)
+
+
+class CutAudioRequest(BaseModel):
+    audio_url: str = Field(..., description="URL of the audio or video file to cut")
+    start: float = Field(..., ge=0, description="Start time in seconds")
+    end: float = Field(..., ge=0, description="End time in seconds")
+    cookies_base64: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded Netscape cookies.txt content for yt-dlp auth.",
+    )
+
+    @field_validator("start", "end", mode="before")
+    @classmethod
+    def parse_time_input(cls, value: Any) -> float:
+        if isinstance(value, (int, float)):
+            val = float(value)
+            if val < 0:
+                raise ValueError("Timestamp cannot be negative")
+            return val
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Timestamp cannot be empty")
+        if ":" in text:
+            parts = text.split(":")
+            if len(parts) == 3:
+                val = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                val = float(parts[0]) * 60 + float(parts[1])
+            else:
+                raise ValueError("Invalid timestamp format")
+            if val < 0:
+                raise ValueError("Timestamp cannot be negative")
+            return val
+        val = float(text)
+        if val < 0:
+            raise ValueError("Timestamp cannot be negative")
+        return val
+
+    @model_validator(mode="after")
+    def validate_end_after_start(self) -> "CutAudioRequest":
+        if self.end <= self.start:
+            raise ValueError("end time must be greater than start time")
+        return self
+
