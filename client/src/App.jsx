@@ -11,18 +11,25 @@ const TRIM_WEBHOOK_URL =
   "https://n8n-m4wwkkco4sogkkg0gk0k8og8.20.55.33.27.sslip.io/webhook/video-trim";
 
 function getYoutubeVideoId(url) {
+  if (!url) return "";
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(String(url).trim());
     const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
-    if (host === "youtube.com" || host === "m.youtube.com") {
-      return parsed.searchParams.get("v") || "";
+    if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+      const v = parsed.searchParams.get("v");
+      if (v) return v;
+
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      if ((pathParts[0] === "shorts" || pathParts[0] === "embed" || pathParts[0] === "v") && pathParts[1]) {
+        return pathParts[1];
+      }
+      if (pathParts.length > 0) {
+        return pathParts[pathParts.length - 1];
+      }
     }
     if (host === "youtu.be") {
-      return parsed.pathname.replace("/", "");
-    }
-    if (host === "youtube-nocookie.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      return parts[parts.length - 1] || "";
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      return pathParts[0] || "";
     }
     return "";
   } catch {
@@ -33,6 +40,20 @@ function getYoutubeVideoId(url) {
 function getYoutubeEmbedUrl(url) {
   const id = getYoutubeVideoId(url);
   return id ? `https://www.youtube.com/embed/${id}` : "";
+}
+
+function getYoutubeThumbnailUrl(url) {
+  const id = getYoutubeVideoId(url);
+  return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : "";
+}
+
+function isShortsVideo(video) {
+  if (!video) return false;
+  const url = String(video.playableUrl || video.rawUrl || "").toLowerCase();
+  const title = String(video.title || "").toLowerCase();
+  if (url.includes("/shorts/") || url.includes("youtube.com/shorts")) return true;
+  if (title.includes("#shorts") || title.includes("#short")) return true;
+  return false;
 }
 
 function timestampToSeconds(value) {
@@ -289,6 +310,7 @@ function App() {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [segments, setSegments] = useState([]);
   const [query, setQuery] = useState("");
+  const [activeTab, setActiveTab] = useState("all"); // 'all' | 'shorts' | 'standard'
   const [isLoadingFeed, setIsLoadingFeed] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [error, setError] = useState("");
@@ -409,13 +431,33 @@ function App() {
     return () => document.removeEventListener("mouseup", handleSelection);
   }, [selectedVideo]);
 
+  // Tab counts
+  const tabCounts = useMemo(() => {
+    const all = videos.length;
+    const shorts = videos.filter(isShortsVideo).length;
+    const standard = all - shorts;
+    return { all, shorts, standard };
+  }, [videos]);
+
+  // Tab & search filtering
   const filteredVideos = useMemo(() => {
+    let list = videos;
+    if (activeTab === "shorts") {
+      list = list.filter(isShortsVideo);
+    } else if (activeTab === "standard") {
+      list = list.filter((v) => !isShortsVideo(v));
+    }
+
     const term = query.trim().toLowerCase();
-    if (!term) return videos;
-    return videos.filter((video) =>
-      [video.title, video.sourceLabel, video.rawUrl, video.playableUrl].join(" ").toLowerCase().includes(term)
+    if (!term) return list;
+
+    return list.filter((video) =>
+      [video.title, video.sourceLabel, video.rawUrl, video.playableUrl, video.id]
+        .join(" ")
+        .toLowerCase()
+        .includes(term)
     );
-  }, [videos, query]);
+  }, [videos, activeTab, query]);
 
   const analytics = useMemo(() => buildAnalytics(selectedVideo, segments), [selectedVideo, segments]);
 
@@ -574,226 +616,341 @@ function App() {
 
   return (
     <main className={`page ${selectedVideo ? "with-trim-panel" : ""}`}>
-      <header className="hero">
-        <p className="kicker">Video Feed</p>
-        <h1>YouTube Video Library</h1>
-        <p>Browse videos from Supabase, open details, inspect analytics, and review transcript segments.</p>
+      {/* App Header */}
+      <header className="app-header">
+        <div className="header-top">
+          <div className="brand-badge">
+            <span className="dot"></span>
+            Video Orchestrator 2.0
+          </div>
+          <p className="meta" style={{ margin: 0 }}>
+            {videos.length} videos synced from Supabase
+          </p>
+        </div>
+        <div>
+          <h1>Video & Transcript Library</h1>
+          <p>
+            Browse standard YouTube videos and YouTube Shorts, inspect transcript segments, review analytics,
+            and trim clips via AI workflow.
+          </p>
+        </div>
+
+        {/* Tab Navigation */}
+        {!selectedVideo ? (
+          <nav className="tabs-nav" aria-label="Video categories">
+            <button
+              type="button"
+              className={`tab-btn ${activeTab === "all" ? "active" : ""}`}
+              onClick={() => setActiveTab("all")}
+            >
+              <span>🌐 All Videos</span>
+              <span className="badge-count">{tabCounts.all}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`tab-btn tab-shorts ${activeTab === "shorts" ? "active" : ""}`}
+              onClick={() => setActiveTab("shorts")}
+            >
+              <span>⚡ YouTube Shorts</span>
+              <span className="badge-count">{tabCounts.shorts}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`tab-btn ${activeTab === "standard" ? "active" : ""}`}
+              onClick={() => setActiveTab("standard")}
+            >
+              <span>🎬 Long Videos</span>
+              <span className="badge-count">{tabCounts.standard}</span>
+            </button>
+          </nav>
+        ) : null}
       </header>
 
+      {/* Configuration or Error Alerts */}
       {missingConfig.length ? (
-        <section className="panel">
-          <h2>Configuration Required</h2>
-          <p className="error">Missing configuration: {missingConfig.join(", ")}</p>
+        <section className="error-alert">
+          <strong>Configuration Required:</strong> Missing {missingConfig.join(", ")}
         </section>
       ) : null}
 
       {error ? (
-        <section className="panel">
-          <p className="error" role="alert">
-            {error}
-          </p>
+        <section className="error-alert" role="alert">
+          {error}
         </section>
       ) : null}
 
+      {/* Main Feed View */}
       {!selectedVideo ? (
-        <section className="panel">
-          <div className="toolbar">
-            <input
-              type="search"
-              placeholder="Search by title, source, or URL..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              disabled={isLoadingFeed}
-            />
-            <button type="button" onClick={loadFeed} disabled={isLoadingFeed}>
-              {isLoadingFeed ? "Refreshing..." : "Refresh"}
-            </button>
+        <>
+          {/* Toolbar */}
+          <div className="toolbar-panel">
+            <div className="search-box">
+              <span className="search-icon">🔍</span>
+              <input
+                type="search"
+                className="search-input"
+                placeholder={
+                  activeTab === "shorts"
+                    ? "Search YouTube Shorts..."
+                    : activeTab === "standard"
+                      ? "Search Long Videos..."
+                      : "Search by title, source, or URL..."
+                }
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                disabled={isLoadingFeed}
+              />
+            </div>
+            <div className="action-btns">
+              {query ? (
+                <button type="button" className="btn-secondary" onClick={() => setQuery("")}>
+                  Clear
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={loadFeed}
+                disabled={isLoadingFeed}
+              >
+                {isLoadingFeed ? "Refreshing..." : "🔄 Refresh Feed"}
+              </button>
+            </div>
           </div>
 
+          {/* Video Cards Grid */}
           <div className="feed-grid">
             {filteredVideos.map((video) => {
-              const embedUrl = getYoutubeEmbedUrl(video.playableUrl || video.rawUrl);
+              const isShort = isShortsVideo(video);
+              const thumbUrl = getYoutubeThumbnailUrl(video.playableUrl || video.rawUrl);
               return (
-                <article className="feed-card" key={video.id}>
-                  {embedUrl ? (
-                    <iframe
-                      className="feed-embed"
-                      src={embedUrl}
-                      title={video.title}
-                      loading="lazy"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allowFullScreen
-                    />
-                  ) : (
-                    <div className="feed-placeholder">No YouTube embed available</div>
-                  )}
-                  <h3>{video.title}</h3>
-                  <p className="meta">{video.sourceLabel || "Unknown source"}</p>
-                  <p className="meta">Video ID: {video.id}</p>
-                  <button type="button" onClick={() => openDetails(video)}>
-                    Open Details
-                  </button>
+                <article
+                  className={`feed-card ${isShort ? "card-shorts" : ""}`}
+                  key={video.id}
+                  onClick={() => openDetails(video)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <div className="card-media">
+                    {thumbUrl ? (
+                      <img
+                        src={thumbUrl}
+                        alt={video.title}
+                        className="thumbnail-img"
+                        loading="lazy"
+                      />
+                    ) : null}
+                    <div className="card-media-overlay">
+                      <div className="play-btn-circle">▶</div>
+                    </div>
+                    <span className={`card-tag ${isShort ? "tag-shorts" : "tag-video"}`}>
+                      {isShort ? "⚡ Short" : "🎬 Video"}
+                    </span>
+                  </div>
+
+                  <div className="card-body">
+                    <h3 className="card-title" title={video.title}>
+                      {video.title}
+                    </h3>
+
+                    <div className="card-meta-bar">
+                      <div className="card-source">
+                        <span className="card-source-dot"></span>
+                        <span>{video.sourceLabel || "Bloomberg TV"}</span>
+                      </div>
+                      <span className="meta">{video.createdAt ? new Date(video.createdAt).toLocaleDateString() : ""}</span>
+                    </div>
+
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn-open-card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDetails(video);
+                        }}
+                      >
+                        Inspect & Clip ▶
+                      </button>
+                    </div>
+                  </div>
                 </article>
               );
             })}
           </div>
 
           {!isLoadingFeed && !filteredVideos.length ? (
-            <p className="empty">No videos found in the selected dataset.</p>
+            <div className="empty-box">
+              <h3>No videos found</h3>
+              <p style={{ marginTop: "0.5rem" }}>
+                {activeTab === "shorts"
+                  ? "No YouTube Shorts found in the current dataset."
+                  : activeTab === "standard"
+                    ? "No long videos found in the current dataset."
+                    : "No videos match your search query."}
+              </p>
+            </div>
           ) : null}
-        </section>
+        </>
       ) : (
-        <section className="details">
-          <div className="details-head">
-            <button type="button" className="ghost-btn" onClick={closeDetails}>
-              Back to Feed
-            </button>
-            <h2>{selectedVideo.title}</h2>
+        /* Video Details View */
+        <section className="details-grid">
+          {/* Main Player & Analytics Column */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+            <div className="details-header">
+              <button type="button" className="btn-back" onClick={closeDetails}>
+                ← Back to {activeTab === "shorts" ? "Shorts" : activeTab === "standard" ? "Long Videos" : "Feed"}
+              </button>
+            </div>
+
+            <article className="player-card">
+              <h2>{selectedVideo.title}</h2>
+              <div className="card-meta-bar" style={{ marginBottom: "0.5rem" }}>
+                <span className="meta">Source: {selectedVideo.sourceLabel || "Bloomberg TV"}</span>
+                <span className={`card-tag ${isShortsVideo(selectedVideo) ? "tag-shorts" : "tag-video"}`} style={{ position: "static" }}>
+                  {isShortsVideo(selectedVideo) ? "⚡ YouTube Short" : "🎬 Long Video"}
+                </span>
+              </div>
+
+              <div className={`video-frame-container ${isShortsVideo(selectedVideo) ? "frame-shorts" : ""}`}>
+                {getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl) ? (
+                  <iframe
+                    className="main-embed"
+                    src={getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl)}
+                    title={selectedVideo.title}
+                    loading="lazy"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
+                  />
+                ) : (
+                  <div className="empty-box">No embeddable YouTube URL for this video.</div>
+                )}
+              </div>
+
+              <p className="meta" style={{ wordBreak: "break-all" }}>
+                URL: <a href={selectedVideo.playableUrl || selectedVideo.rawUrl} target="_blank" rel="noreferrer" style={{ color: "#818cf8" }}>{selectedVideo.playableUrl || selectedVideo.rawUrl}</a>
+              </p>
+            </article>
+
+            {/* Metrics */}
+            <div className="metrics-row">
+              <div className="metric-pill">
+                <div className="label">Segments</div>
+                <div className="val">{analytics.segmentsCount}</div>
+              </div>
+              <div className="metric-pill">
+                <div className="label">Total Duration</div>
+                <div className="val">{formatDuration(analytics.totalDuration)}</div>
+              </div>
+              <div className="metric-pill">
+                <div className="label">Avg Segment</div>
+                <div className="val">{formatDuration(analytics.avgDuration)}</div>
+              </div>
+              <div className="metric-pill">
+                <div className="label">Words</div>
+                <div className="val">{analytics.totalWords}</div>
+              </div>
+            </div>
+
+            {/* Full Transcript Card */}
+            <article className="player-card">
+              <h3>Full Transcript</h3>
+              <p className="segment-text selectable-text" data-full-text="true" style={{ whiteSpace: "pre-wrap" }}>
+                {fullText || "No full transcript available."}
+              </p>
+            </article>
           </div>
 
-          <article className="video-card">
-            {getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl) ? (
-              <iframe
-                className="main-embed"
-                src={getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl)}
-                title={selectedVideo.title}
-                loading="lazy"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                referrerPolicy="strict-origin-when-cross-origin"
-                allowFullScreen
-              />
-            ) : (
-              <div className="feed-placeholder">No embeddable YouTube URL for this video.</div>
-            )}
-            <p className="meta">URL: {selectedVideo.playableUrl || selectedVideo.rawUrl || "-"}</p>
-            <p className="meta">Source: {selectedVideo.sourceLabel || "-"}</p>
-          </article>
+          {/* Segments Column */}
+          <article className="transcript-card">
+            <div className="transcript-header">
+              <h3>Transcript Segments ({segments.length})</h3>
+            </div>
 
-          <section className="analytics-grid">
-            <article className="metric-card">
-              <h3>Segments</h3>
-              <p>{analytics.segmentsCount}</p>
-            </article>
-            <article className="metric-card">
-              <h3>Total Duration</h3>
-              <p>{formatDuration(analytics.totalDuration)}</p>
-            </article>
-            <article className="metric-card">
-              <h3>Avg Segment</h3>
-              <p>{formatDuration(analytics.avgDuration)}</p>
-            </article>
-            <article className="metric-card">
-              <h3>Transcript Words</h3>
-              <p>{analytics.totalWords}</p>
-            </article>
-          </section>
+            {isLoadingDetails ? <p className="meta">Loading segments...</p> : null}
+            {!isLoadingDetails && !segments.length ? (
+              <div className="empty-box">No transcript segments found for this video.</div>
+            ) : null}
 
-          <article className="panel">
-            <h3>Full Transcript / Captions</h3>
-            <p className="selectable-text" data-full-text="true">
-              {fullText || "No full transcript available."}
-            </p>
-          </article>
-
-          <article className="panel">
-            <h3>Coverage</h3>
-            <p className="meta">
-              Start: {analytics.firstStart || "-"} | End: {analytics.lastEnd || "-"}
-            </p>
-            <h3>Segments List</h3>
-            {isLoadingDetails ? <p>Loading segments...</p> : null}
-            {!isLoadingDetails && !segments.length ? <p className="empty">No segments found.</p> : null}
-            <div className="segment-list">
+            <div className="segment-scroll-container">
               {segments.map((segment) => (
-                <article className="segment-item" key={segment.id}>
-                  <h4>
-                    Segment {segment.segmentNumber} ({segment.start} - {segment.end})
-                  </h4>
-                  <p className="selectable-text" data-segment-number={segment.segmentNumber}>
+                <div className="segment-card-item" key={segment.id}>
+                  <div className="segment-time-badge">
+                    ⏱ Segment {segment.segmentNumber} ({segment.start} - {segment.end})
+                  </div>
+                  <p className="segment-text selectable-text" data-segment-number={segment.segmentNumber}>
                     {segment.transcript || "No transcript text."}
                   </p>
-                </article>
+                </div>
               ))}
             </div>
           </article>
         </section>
       )}
 
+      {/* Floating Trim Drawer / Modal */}
       {selectedVideo ? (
         <aside className="trim-modal" aria-live="polite">
-          <h2>Trim Video</h2>
-          <p className="meta">
-            Text selection auto-fills <code>selected_text</code> and segment inference.
+          <div className="trim-modal-head">
+            <h3>✂️ AI Video Clipper</h3>
+          </div>
+          <p className="meta" style={{ marginBottom: "1rem" }}>
+            Select any text from the transcript above to auto-fill the clip scope.
           </p>
+
           <form onSubmit={submitTrimRequest} className="trim-form">
-            <label className="field">
-              <span>selected_text</span>
+            <div className="form-group">
+              <label>Selected Text</label>
               <textarea
+                className="form-textarea"
                 value={trimForm.selected_text}
                 onChange={(event) =>
                   setTrimForm((current) => ({ ...current, selected_text: event.target.value }))
                 }
-                rows={5}
-                placeholder="Select text from transcript/captions to auto-fill."
+                rows={4}
+                placeholder="Highlight text from transcript above to auto-fill."
               />
-            </label>
+            </div>
 
-            <label className="field">
-              <span>Upload Source Video To Supabase</span>
-              <input type="file" accept="video/*" onChange={onUploadSourceVideo} />
-            </label>
+            <div className="form-group">
+              <label>Upload Source Video to Supabase</label>
+              <input type="file" className="form-input" accept="video/*" onChange={onUploadSourceVideo} />
+            </div>
 
-            <label className="field">
-              <span>selection_scope</span>
+            <div className="form-group">
+              <label>Selection Scope</label>
               <select
+                className="form-select"
                 value={trimForm.selection_scope}
                 onChange={(event) =>
                   setTrimForm((current) => ({ ...current, selection_scope: event.target.value }))
                 }
               >
-                <option value="segment">segment</option>
-                <option value="full_transcript">full_transcript</option>
+                <option value="segment">Segment Scope</option>
+                <option value="full_transcript">Full Transcript Scope</option>
               </select>
-            </label>
+            </div>
 
-            <button type="submit" disabled={isSubmittingTrim}>
-              {isSubmittingTrim ? "Submitting..." : "Trim via n8n"}
+            <button type="submit" className="btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={isSubmittingTrim}>
+              {isSubmittingTrim ? "Generating Clip..." : "✨ Trim Clip via n8n"}
             </button>
           </form>
 
-          {trimError ? <p className="error">{trimError}</p> : null}
-          {isUploadingSource ? <p className="meta">Uploading source video to Supabase...</p> : null}
+          {trimError ? <div className="error-alert" style={{ marginTop: "1rem" }}>{trimError}</div> : null}
+          {isUploadingSource ? <p className="meta" style={{ marginTop: "0.5rem" }}>Uploading source video...</p> : null}
 
           {trimResult?.url || trimResult?.transcriptText || trimResult?.transcriptSegments?.length ? (
             <div className="trim-result">
-              <h3>Trim Result</h3>
+              <h4 style={{ marginBottom: "0.5rem" }}>Trimmed Output</h4>
               {trimResult?.url ? (
-                <video src={trimResult.url} controls preload="metadata" />
+                <video src={trimResult.url} controls preload="metadata" style={{ width: "100%", borderRadius: "10px" }} />
               ) : (
-                <p className="meta">No clipped video in service response. Transcript is shown below.</p>
+                <p className="meta">Transcript extracted successfully.</p>
               )}
               {trimResult?.transcriptText ? (
-                <p className="meta transcript-text">{trimResult.transcriptText}</p>
-              ) : null}
-              {Array.isArray(trimResult?.transcriptSegments) && trimResult.transcriptSegments.length ? (
-                <div className="transcript-timeline">
-                  <h4>Transcript + Timestamps</h4>
-                  <div className="timeline-list">
-                    {trimResult.transcriptSegments.map((segment, index) => (
-                      <article
-                        key={`${segment.id ?? index}-${segment.start ?? ""}-${segment.end ?? ""}`}
-                        className="timeline-item"
-                      >
-                        <p className="meta">
-                          {(segment.start ?? 0).toFixed ? segment.start.toFixed(3) : segment.start} -{" "}
-                          {(segment.end ?? 0).toFixed ? segment.end.toFixed(3) : segment.end}
-                        </p>
-                        <p>{segment.text || ""}</p>
-                      </article>
-                    ))}
-                  </div>
-                </div>
+                <p className="meta transcript-text" style={{ marginTop: "0.5rem" }}>{trimResult.transcriptText}</p>
               ) : null}
             </div>
           ) : null}
