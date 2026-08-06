@@ -3,7 +3,6 @@ import {
   fetchSegmentsForVideoId,
   fetchVideosFeed,
   getMissingConfig,
-  uploadVideoFile,
 } from "./lib/pipeline";
 
 const TRIM_WEBHOOK_URL =
@@ -321,13 +320,11 @@ function App() {
     segment_number: "1",
     selected_text: "",
     status: "running",
-    source_video_url: "",
     youtube_url: "",
     cookies_base64: "",
     selection_scope: "segment",
   });
   const [isSubmittingTrim, setIsSubmittingTrim] = useState(false);
-  const [isUploadingSource, setIsUploadingSource] = useState(false);
   const [trimError, setTrimError] = useState("");
   const [trimResult, setTrimResult] = useState(null);
   const [trimStatus, setTrimStatus] = useState("");
@@ -368,7 +365,6 @@ function App() {
 
   useEffect(() => {
     if (!selectedVideo) return;
-    const sourceUrl = String(selectedVideo.playableUrl || selectedVideo.rawUrl || "").trim();
     const embedSource = String(selectedVideo.rawUrl || selectedVideo.playableUrl || "").trim();
     const youtubeUrl = getYoutubeEmbedUrl(embedSource) ? embedSource : "";
     const nextRequestId = generateRequestId();
@@ -378,7 +374,6 @@ function App() {
       segment_number: "1",
       selected_text: "",
       status: "running",
-      source_video_url: sourceUrl,
       youtube_url: youtubeUrl,
       selection_scope: "segment",
     });
@@ -502,10 +497,6 @@ function App() {
       setTrimError("selected_text is required. Select text from transcript or page.");
       return;
     }
-    if (!String(trimForm.source_video_url || "").trim()) {
-      setTrimError("source_video_url is required.");
-      return;
-    }
 
     setTrimError("");
     setTrimStatus("running");
@@ -522,7 +513,6 @@ function App() {
         request_id: requestId,
         selected_text: selectedText,
         status: String(trimForm.status || "running"),
-        source_video_url: String(trimForm.source_video_url || "").trim(),
         youtube_url: String(trimForm.youtube_url || "").trim(),
         selection_scope: isFullTranscriptSelection
           ? "full_transcript"
@@ -593,24 +583,6 @@ function App() {
       setTrimError(err instanceof Error ? err.message : "Trim request failed.");
     } finally {
       setIsSubmittingTrim(false);
-    }
-  };
-
-  const onUploadSourceVideo = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setTrimError("");
-    setIsUploadingSource(true);
-    try {
-      const upload = await uploadVideoFile(file);
-      setTrimForm((current) => ({
-        ...current,
-        source_video_url: upload.publicUrl,
-      }));
-    } catch (err) {
-      setTrimError(err instanceof Error ? err.message : "Failed to upload source video.");
-    } finally {
-      setIsUploadingSource(false);
     }
   };
 
@@ -915,11 +887,6 @@ function App() {
             </div>
 
             <div className="form-group">
-              <label>Upload Source Video to Supabase</label>
-              <input type="file" className="form-input" accept="video/*" onChange={onUploadSourceVideo} />
-            </div>
-
-            <div className="form-group">
               <label>Selection Scope</label>
               <select
                 className="form-select"
@@ -939,7 +906,6 @@ function App() {
           </form>
 
           {trimError ? <div className="error-alert" style={{ marginTop: "1rem" }}>{trimError}</div> : null}
-          {isUploadingSource ? <p className="meta" style={{ marginTop: "0.5rem" }}>Uploading source video...</p> : null}
 
           {trimResult?.url || trimResult?.transcriptText || trimResult?.transcriptSegments?.length ? (
             <div className="trim-result">

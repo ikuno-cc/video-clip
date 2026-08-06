@@ -206,14 +206,12 @@ export async function requestSelectionClip({
   videoId,
   segmentNumber,
   selectedText,
-  sourceVideoUrl,
   youtubeUrl,
   selectionScope = "segment",
 }) {
   const payload = {
     video_id: String(videoId),
     selected_text: selectedText,
-    source_video_url: sourceVideoUrl,
     youtube_url: youtubeUrl,
     selection_scope: selectionScope,
   };
