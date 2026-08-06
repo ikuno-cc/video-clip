@@ -7,12 +7,15 @@ FRONTEND_DIST = BASE_DIR / "client_dist"
 
 WORKFLOW_URL = os.getenv(
     "N8N_WORKFLOW_URL",
-    "https://n8n-m4wwkkco4sogkkg0gk0k8og8.20.55.33.27.sslip.io/webhook/7d16e3b6-7fea-4c8b-9464-6b175e2fdb26",
+    "https://n8n-kuno.169.58.4.250.sslip.io/webhook/video-trim",
 )
 WORKFLOW_METHOD = os.getenv("N8N_WORKFLOW_METHOD", "POST").strip().upper()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://rwvoskxjwobvukmujpcr.supabase.co").rstrip("/")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kzhwjmdsmmrksatxpeec.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_00WlDHGbnjQUF8Jqu1NHQw_VE-tyZ4A")
+SUPABASE_ANON_KEY = os.getenv(
+    "SUPABASE_ANON_KEY",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt6aHdqbWRzbW1ya3NhdHhwZWVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU1NTYwNjQsImV4cCI6MjA3MTEzMjA2NH0.EiqndjLjszrf9v_gCIQelceCLUiQloL51O6jS1psODY",
+)
 TRANSCRIPT_SCHEMA = os.getenv("TRANSCRIPT_SCHEMA", "transcript")
 VIDEOS_TABLE = os.getenv("TRANSCRIPT_VIDEOS_TABLE", "videos")
 SEGMENTS_TABLE = os.getenv("TRANSCRIPT_SEGMENTS_TABLE", "segments")
