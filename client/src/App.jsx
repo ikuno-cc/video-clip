@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  fetchClipsForVideoId,
   fetchSegmentsForVideoId,
   fetchVideosFeed,
   getMissingConfig,
@@ -309,6 +310,8 @@ function App() {
   const [videos, setVideos] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [segments, setSegments] = useState([]);
+  const [videoClips, setVideoClips] = useState([]);
+  const [detailSubTab, setDetailSubTab] = useState("overview"); // 'overview' | 'clips'
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all"); // 'all' | 'shorts' | 'standard'
   const [isLoadingFeed, setIsLoadingFeed] = useState(false);
@@ -455,16 +458,22 @@ function App() {
 
   const analytics = useMemo(() => buildAnalytics(selectedVideo, segments), [selectedVideo, segments]);
 
-  const openDetails = async (video) => {
+  const openDetails = async (video, initialSubTab = "overview") => {
     setSelectedVideo(video);
+    setDetailSubTab(initialSubTab);
     setSegments([]);
+    setVideoClips([]);
     setError("");
     setIsLoadingDetails(true);
     try {
-      const rows = await fetchSegmentsForVideoId(video.id, { allowEmpty: true });
-      setSegments(rows);
+      const [segRows, clipRows] = await Promise.all([
+        fetchSegmentsForVideoId(video.id, { allowEmpty: true }),
+        fetchClipsForVideoId(video.id).catch(() => []),
+      ]);
+      setSegments(segRows);
+      setVideoClips(clipRows);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load segments.");
+      setError(err instanceof Error ? err.message : "Failed to load video details.");
     } finally {
       setIsLoadingDetails(false);
     }
@@ -473,6 +482,7 @@ function App() {
   const closeDetails = () => {
     setSelectedVideo(null);
     setSegments([]);
+    setVideoClips([]);
     setError("");
   };
 
@@ -498,94 +508,43 @@ function App() {
     }
 
     setTrimError("");
-    setTrimStatus("running");
-    setTrimForm((current) => ({ ...current, request_id: requestId, status: "running" }));
+    setTrimStatus("sent");
+    setTrimForm((current) => ({ ...current, request_id: requestId, status: "sent" }));
     setIsSubmittingTrim(true);
-    if (trimResult?.isObjectUrl && trimResult?.url) {
-      URL.revokeObjectURL(trimResult.url);
-    }
     setTrimResult(null);
 
-    try {
-      const rawYoutubeUrl = String(
-        selectedVideo?.rawUrl || selectedVideo?.playableUrl || trimForm.youtube_url || ""
-      ).trim();
+    const rawYoutubeUrl = String(
+      selectedVideo?.rawUrl || selectedVideo?.playableUrl || trimForm.youtube_url || ""
+    ).trim();
 
-      const payload = {
-        video_id: videoId,
-        request_id: requestId,
-        selected_text: selectedText,
-        youtube_url: rawYoutubeUrl,
-        selection_scope: isFullTranscriptSelection
-          ? "full_transcript"
-          : String(trimForm.selection_scope || "segment"),
-        output_format: "json",
-      };
-      if (!isFullTranscriptSelection && Number.isFinite(segmentNumberValue) && segmentNumberValue > 0) {
-        payload.segment_number = segmentNumberValue;
-      }
-
-      const response = await fetch(TRIM_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Trim request failed (${response.status}): ${body || "no body"}`);
-      }
-      setTrimStatus((response.headers.get("x-status") || "completed").toLowerCase());
-      setTrimForm((current) => ({
-        ...current,
-        status: (response.headers.get("x-status") || "completed").toLowerCase(),
-        request_id: response.headers.get("x-request-id") || requestId,
-      }));
-
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        throw new Error("Unexpected response type. Expected JSON with transcript and base64 clip.");
-      }
-
-      const responseJson = await response.json();
-      const normalized = normalizeTrimJsonResult(responseJson, selectedText);
-
-      if (!normalized.videoUrl) {
-        const fallbackUrl = findClippedMp4Url(responseJson);
-        if (!fallbackUrl) {
-          setTrimResult({
-            url: "",
-            isObjectUrl: false,
-            transcriptText: normalized.transcriptText,
-            transcriptSegments: normalized.transcriptSegments,
-            rawResponse: normalized.raw,
-          });
-          return;
-        }
-        setTrimResult({
-          url: String(fallbackUrl),
-          isObjectUrl: false,
-          transcriptText: normalized.transcriptText,
-          transcriptSegments: normalized.transcriptSegments,
-          rawResponse: normalized.raw,
-        });
-        return;
-      }
-
-      setTrimResult({
-        url: normalized.videoUrl,
-        isObjectUrl: false,
-        transcriptText: normalized.transcriptText,
-        transcriptSegments: normalized.transcriptSegments,
-        rawResponse: normalized.raw,
-      });
-    } catch (err) {
-      setTrimStatus("failed");
-      setTrimForm((current) => ({ ...current, status: "failed" }));
-      setTrimError(err instanceof Error ? err.message : "Trim request failed.");
-    } finally {
-      setIsSubmittingTrim(false);
+    const payload = {
+      video_id: videoId,
+      request_id: requestId,
+      selected_text: selectedText,
+      youtube_url: rawYoutubeUrl,
+      selection_scope: isFullTranscriptSelection
+        ? "full_transcript"
+        : String(trimForm.selection_scope || "segment"),
+      output_format: "json",
+    };
+    if (!isFullTranscriptSelection && Number.isFinite(segmentNumberValue) && segmentNumberValue > 0) {
+      payload.segment_number = segmentNumberValue;
     }
+
+    // Fire and forget request (do not wait for response)
+    fetch(TRIM_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch((err) => {
+      console.warn("Background trim request warning:", err);
+    });
+
+    // Immediately inform the user
+    setTrimResult({
+      message: "Trim request sent! The clipped video will appear in the Clips Page once processing completes.",
+    });
+    setIsSubmittingTrim(false);
   };
 
   return (
@@ -605,7 +564,7 @@ function App() {
           <h1>Video & Transcript Library</h1>
           <p>
             Browse standard YouTube videos and YouTube Shorts, inspect transcript segments, review analytics,
-            and trim clips via AI workflow.
+            and view generated clips.
           </p>
         </div>
 
@@ -703,7 +662,7 @@ function App() {
                 <article
                   className={`feed-card ${isShort ? "card-shorts" : ""}`}
                   key={video.id}
-                  onClick={() => openDetails(video)}
+                  onClick={() => openDetails(video, "overview")}
                   style={{ cursor: "pointer" }}
                 >
                   <div className="card-media">
@@ -736,16 +695,33 @@ function App() {
                       <span className="meta">{video.createdAt ? new Date(video.createdAt).toLocaleDateString() : ""}</span>
                     </div>
 
-                    <div className="card-actions">
+                    <div className="card-actions" style={{ display: "flex", gap: "0.5rem" }}>
                       <button
                         type="button"
                         className="btn-open-card"
+                        style={{ flex: 1 }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          openDetails(video);
+                          openDetails(video, "overview");
                         }}
                       >
-                        Inspect & Clip ▶
+                        Inspect ▶
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-open-card"
+                        style={{
+                          flex: 1,
+                          background: "rgba(236, 72, 153, 0.15)",
+                          borderColor: "rgba(236, 72, 153, 0.3)",
+                          color: "#f472b6",
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDetails(video, "clips");
+                        }}
+                      >
+                        🎬 Clips Page
                       </button>
                     </div>
                   </div>
@@ -768,100 +744,214 @@ function App() {
           ) : null}
         </>
       ) : (
-        /* Video Details View */
-        <section className="details-grid">
-          {/* Main Player & Analytics Column */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-            <div className="details-header">
-              <button type="button" className="btn-back" onClick={closeDetails}>
-                ← Back to {activeTab === "shorts" ? "Shorts" : activeTab === "standard" ? "Long Videos" : "Feed"}
-              </button>
-            </div>
-
-            <article className="player-card">
-              <h2>{selectedVideo.title}</h2>
-              <div className="card-meta-bar" style={{ marginBottom: "0.5rem" }}>
-                <span className="meta">Source: {selectedVideo.sourceLabel || "Bloomberg TV"}</span>
-                <span className={`card-tag ${isShortsVideo(selectedVideo) ? "tag-shorts" : "tag-video"}`} style={{ position: "static" }}>
-                  {isShortsVideo(selectedVideo) ? "⚡ YouTube Short" : "🎬 Long Video"}
-                </span>
-              </div>
-
-              <div className={`video-frame-container ${isShortsVideo(selectedVideo) ? "frame-shorts" : ""}`}>
-                {getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl) ? (
-                  <iframe
-                    className="main-embed"
-                    src={getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl)}
-                    title={selectedVideo.title}
-                    loading="lazy"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    allowFullScreen
-                  />
-                ) : (
-                  <div className="empty-box">No embeddable YouTube URL for this video.</div>
-                )}
-              </div>
-
-              <p className="meta" style={{ wordBreak: "break-all" }}>
-                URL: <a href={selectedVideo.playableUrl || selectedVideo.rawUrl} target="_blank" rel="noreferrer" style={{ color: "#818cf8" }}>{selectedVideo.playableUrl || selectedVideo.rawUrl}</a>
-              </p>
-            </article>
-
-            {/* Metrics */}
-            <div className="metrics-row">
-              <div className="metric-pill">
-                <div className="label">Segments</div>
-                <div className="val">{analytics.segmentsCount}</div>
-              </div>
-              <div className="metric-pill">
-                <div className="label">Total Duration</div>
-                <div className="val">{formatDuration(analytics.totalDuration)}</div>
-              </div>
-              <div className="metric-pill">
-                <div className="label">Avg Segment</div>
-                <div className="val">{formatDuration(analytics.avgDuration)}</div>
-              </div>
-              <div className="metric-pill">
-                <div className="label">Words</div>
-                <div className="val">{analytics.totalWords}</div>
-              </div>
-            </div>
-
-            {/* Full Transcript Card */}
-            <article className="player-card">
-              <h3>Full Transcript</h3>
-              <p className="segment-text selectable-text" data-full-text="true" style={{ whiteSpace: "pre-wrap" }}>
-                {fullText || "No full transcript available."}
-              </p>
-            </article>
+        /* Video Details Container */
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+          {/* Details Header & Sub Navigation */}
+          <div className="details-header" style={{ marginBottom: 0 }}>
+            <button type="button" className="btn-back" onClick={closeDetails}>
+              ← Back to {activeTab === "shorts" ? "Shorts" : activeTab === "standard" ? "Long Videos" : "Feed"}
+            </button>
           </div>
 
-          {/* Segments Column */}
-          <article className="transcript-card">
-            <div className="transcript-header">
-              <h3>Transcript Segments ({segments.length})</h3>
-            </div>
+          <nav className="sub-tabs-nav" aria-label="Video detail tabs">
+            <button
+              type="button"
+              className={`sub-tab-btn ${detailSubTab === "overview" ? "active" : ""}`}
+              onClick={() => setDetailSubTab("overview")}
+            >
+              📹 Overview & Transcript
+            </button>
+            <button
+              type="button"
+              className={`sub-tab-btn ${detailSubTab === "clips" ? "active" : ""}`}
+              onClick={() => setDetailSubTab("clips")}
+            >
+              🎬 Clips Page ({videoClips.length})
+            </button>
+          </nav>
 
-            {isLoadingDetails ? <p className="meta">Loading segments...</p> : null}
-            {!isLoadingDetails && !segments.length ? (
-              <div className="empty-box">No transcript segments found for this video.</div>
-            ) : null}
-
-            <div className="segment-scroll-container">
-              {segments.map((segment) => (
-                <div className="segment-card-item" key={segment.id}>
-                  <div className="segment-time-badge">
-                    ⏱ Segment {segment.segmentNumber} ({segment.start} - {segment.end})
+          {/* Sub-Tab 1: Overview & Transcript */}
+          {detailSubTab === "overview" ? (
+            <section className="details-grid">
+              {/* Main Player & Analytics Column */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+                <article className="player-card">
+                  <h2>{selectedVideo.title}</h2>
+                  <div className="card-meta-bar" style={{ marginBottom: "0.5rem" }}>
+                    <span className="meta">Source: {selectedVideo.sourceLabel || "Bloomberg TV"}</span>
+                    <span className={`card-tag ${isShortsVideo(selectedVideo) ? "tag-shorts" : "tag-video"}`} style={{ position: "static" }}>
+                      {isShortsVideo(selectedVideo) ? "⚡ YouTube Short" : "🎬 Long Video"}
+                    </span>
                   </div>
-                  <p className="segment-text selectable-text" data-segment-number={segment.segmentNumber}>
-                    {segment.transcript || "No transcript text."}
+
+                  <div className={`video-frame-container ${isShortsVideo(selectedVideo) ? "frame-shorts" : ""}`}>
+                    {getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl) ? (
+                      <iframe
+                        className="main-embed"
+                        src={getYoutubeEmbedUrl(selectedVideo.playableUrl || selectedVideo.rawUrl)}
+                        title={selectedVideo.title}
+                        loading="lazy"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        allowFullScreen
+                      />
+                    ) : (
+                      <div className="empty-box">No embeddable YouTube URL for this video.</div>
+                    )}
+                  </div>
+
+                  <p className="meta" style={{ wordBreak: "break-all" }}>
+                    URL: <a href={selectedVideo.playableUrl || selectedVideo.rawUrl} target="_blank" rel="noreferrer" style={{ color: "#818cf8" }}>{selectedVideo.playableUrl || selectedVideo.rawUrl}</a>
                   </p>
+                </article>
+
+                {/* Metrics */}
+                <div className="metrics-row">
+                  <div className="metric-pill">
+                    <div className="label">Segments</div>
+                    <div className="val">{analytics.segmentsCount}</div>
+                  </div>
+                  <div className="metric-pill">
+                    <div className="label">Total Duration</div>
+                    <div className="val">{formatDuration(analytics.totalDuration)}</div>
+                  </div>
+                  <div className="metric-pill">
+                    <div className="label">Avg Segment</div>
+                    <div className="val">{formatDuration(analytics.avgDuration)}</div>
+                  </div>
+                  <div className="metric-pill">
+                    <div className="label">Words</div>
+                    <div className="val">{analytics.totalWords}</div>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </article>
-        </section>
+
+                {/* Full Transcript Card */}
+                <article className="player-card">
+                  <h3>Full Transcript</h3>
+                  <p className="segment-text selectable-text" data-full-text="true" style={{ whiteSpace: "pre-wrap" }}>
+                    {fullText || "No full transcript available."}
+                  </p>
+                </article>
+              </div>
+
+              {/* Segments Column */}
+              <article className="transcript-card">
+                <div className="transcript-header">
+                  <h3>Transcript Segments ({segments.length})</h3>
+                </div>
+
+                {isLoadingDetails ? <p className="meta">Loading segments...</p> : null}
+                {!isLoadingDetails && !segments.length ? (
+                  <div className="empty-box">No transcript segments found for this video.</div>
+                ) : null}
+
+                <div className="segment-scroll-container">
+                  {segments.map((segment) => (
+                    <div className="segment-card-item" key={segment.id}>
+                      <div className="segment-time-badge">
+                        ⏱ Segment {segment.segmentNumber} ({segment.start} - {segment.end})
+                      </div>
+                      <p className="segment-text selectable-text" data-segment-number={segment.segmentNumber}>
+                        {segment.transcript || "No transcript text."}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </section>
+          ) : (
+            /* Sub-Tab 2: Clips Page for this video */
+            <section style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+              <div className="toolbar-panel" style={{ background: "transparent", border: "none", padding: 0 }}>
+                <div>
+                  <h2 style={{ fontSize: "1.5rem" }}>Clips for "{selectedVideo.title}"</h2>
+                  <p className="meta">All video clips generated from this video via AI workflow ({videoClips.length})</p>
+                </div>
+              </div>
+
+              {isLoadingDetails ? <p className="meta">Loading video clips...</p> : null}
+
+              {!isLoadingDetails && !videoClips.length ? (
+                <div className="empty-box">
+                  <h3>No clips generated yet</h3>
+                  <p style={{ marginTop: "0.5rem", marginBottom: "1rem" }}>
+                    Select text from the transcript overview or highlight any line to trim a new clip!
+                  </p>
+                  <button type="button" className="btn-primary" onClick={() => setDetailSubTab("overview")}>
+                    ← Select Text to Create Clip
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="clips-grid">
+                {videoClips.map((clip, index) => {
+                  const mainTrans = clip.transcripts?.[0];
+                  const textSnippet =
+                    mainTrans?.text ||
+                    mainTrans?.transcript?.[0]?.text ||
+                    "Trimmed video clip";
+                  const startTime = mainTrans?.start ?? 0;
+                  const endTime = mainTrans?.end ?? 0;
+
+                  return (
+                    <article className="clip-card" key={clip.id}>
+                      <div className="clip-badge-bar">
+                        <span className="clip-time-tag">
+                          ⏱ Clip #{index + 1} ({typeof startTime === "number" ? startTime.toFixed(2) : startTime}s - {typeof endTime === "number" ? endTime.toFixed(2) : endTime}s)
+                        </span>
+                        <span className="meta">
+                          {clip.createdAt ? new Date(clip.createdAt).toLocaleDateString() : ""}
+                        </span>
+                      </div>
+
+                      {clip.clipPath ? (
+                        <video
+                          className="clip-player"
+                          src={clip.clipPath}
+                          controls
+                          preload="metadata"
+                        />
+                      ) : (
+                        <div className="empty-box" style={{ padding: "1.5rem" }}>
+                          No video file available for this clip
+                        </div>
+                      )}
+
+                      <div className="clip-transcript-text">
+                        "{textSnippet}"
+                      </div>
+
+                      <div className="clip-card-actions">
+                        {clip.clipPath ? (
+                          <a
+                            className="btn-clip-action"
+                            href={clip.clipPath}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            🔗 Open File
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn-clip-action"
+                          onClick={() => {
+                            if (clip.clipPath) {
+                              navigator.clipboard.writeText(clip.clipPath);
+                              alert("Clip URL copied to clipboard!");
+                            }
+                          }}
+                        >
+                          📋 Copy Link
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+        </div>
       )}
 
       {/* Floating Trim Drawer / Modal */}
@@ -903,13 +993,19 @@ function App() {
             </div>
 
             <button type="submit" className="btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={isSubmittingTrim}>
-              {isSubmittingTrim ? "Generating Clip..." : "✨ Trim Clip via n8n"}
+              {isSubmittingTrim ? "Sending Request..." : "✨ Trim Clip"}
             </button>
           </form>
 
           {trimError ? <div className="error-alert" style={{ marginTop: "1rem" }}>{trimError}</div> : null}
 
-          {trimResult?.url || trimResult?.transcriptText || trimResult?.transcriptSegments?.length ? (
+          {trimResult?.message ? (
+            <div className="trim-result" style={{ background: "rgba(52, 211, 153, 0.12)", border: "1px solid rgba(52, 211, 153, 0.3)", borderRadius: "12px", padding: "1rem", marginTop: "1rem" }}>
+              <p style={{ color: "#6ee7b7", fontWeight: "600", margin: 0, fontSize: "0.9rem", lineHeight: "1.4" }}>
+                🚀 {trimResult.message}
+              </p>
+            </div>
+          ) : trimResult?.url || trimResult?.transcriptText || trimResult?.transcriptSegments?.length ? (
             <div className="trim-result">
               <h4 style={{ marginBottom: "0.5rem" }}>Trimmed Output</h4>
               {trimResult?.url ? (

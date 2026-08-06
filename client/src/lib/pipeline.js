@@ -390,6 +390,51 @@ export async function fetchSegmentsForVideoId(videoId, { allowEmpty = false } = 
   }
 }
 
+export async function fetchClipsForVideoId(videoId) {
+  if (!supabase) throw new Error("Supabase client is not configured.");
+  if (!videoId) throw new Error("video_id is required.");
+
+  try {
+    const { data: clipRows, error: clipError } = await supabase
+      .schema(settings.transcriptSchema)
+      .from("clip")
+      .select("*")
+      .eq("video_id", videoId)
+      .order("created_at", { ascending: false });
+
+    if (clipError) throw new Error(formatSupabaseErrorMessage(clipError, "Fetch clips"));
+    if (!clipRows || !clipRows.length) return [];
+
+    const clipIds = clipRows.map((c) => c.id).filter(Boolean);
+    const { data: transcriptRows, error: transError } = await supabase
+      .schema(settings.transcriptSchema)
+      .from("clip_transcript")
+      .select("*")
+      .in("clip_id", clipIds)
+      .order("order", { ascending: true });
+
+    const transcriptsByClipId = {};
+    if (!transError && transcriptRows) {
+      for (const row of transcriptRows) {
+        if (!transcriptsByClipId[row.clip_id]) {
+          transcriptsByClipId[row.clip_id] = [];
+        }
+        transcriptsByClipId[row.clip_id].push(row);
+      }
+    }
+
+    return clipRows.map((clip) => ({
+      id: clip.id,
+      videoId: clip.video_id,
+      clipPath: clip.clip_path || clip.url || "",
+      createdAt: clip.created_at,
+      transcripts: transcriptsByClipId[clip.id] || [],
+    }));
+  } catch (err) {
+    throw new Error(formatSupabaseErrorMessage(err, "Fetch clips"));
+  }
+}
+
 export async function fetchVideosFeed({ limit = 60 } = {}) {
   if (!supabase) throw new Error("Supabase client is not configured.");
 
