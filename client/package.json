@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node -e \"import('node:fs').then(fs => fs.cpSync('dist', '../client_dist', {recursive: true, force: true}))\"",
     "preview": "vite preview"
   },
   "dependencies": {

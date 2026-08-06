@@ -294,20 +294,42 @@ function parseTimeRange(value) {
   return { start: match[1], end: match[2] };
 }
 
+function formatSupabaseErrorMessage(err, actionName = "Supabase query") {
+  const msg = err?.message || String(err || "");
+  if (
+    msg.includes("Failed to fetch") ||
+    msg.includes("TypeError") ||
+    msg.includes("NetworkError") ||
+    err?.name === "TypeError"
+  ) {
+    const url = required.supabaseUrl || "configured Supabase URL";
+    return (
+      `${actionName} failed due to network connection error (Failed to fetch). ` +
+      `The host '${url}' could not be reached. ` +
+      `Please check your internet connection or verify VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in client/.env.`
+    );
+  }
+  return `${actionName} failed: ${msg}`;
+}
+
 async function resolveVideoId(videoUrl) {
-  const base = supabase
-    .schema(settings.transcriptSchema)
-    .from(settings.videosTable)
-    .select("id")
-    .limit(1);
+  try {
+    const base = supabase
+      .schema(settings.transcriptSchema)
+      .from(settings.videosTable)
+      .select("id")
+      .limit(1);
 
-  const byUrl = await base.eq(settings.videosUrlColumn, videoUrl).maybeSingle();
-  if (byUrl.error) throw new Error(`Supabase video lookup failed: ${byUrl.error.message}`);
-  if (byUrl.data?.id) return byUrl.data.id;
+    const byUrl = await base.eq(settings.videosUrlColumn, videoUrl).maybeSingle();
+    if (byUrl.error) throw new Error(formatSupabaseErrorMessage(byUrl.error, "Supabase video lookup"));
+    if (byUrl.data?.id) return byUrl.data.id;
 
-  const bySource = await base.eq(settings.videosSourceColumn, videoUrl).maybeSingle();
-  if (bySource.error) throw new Error(`Supabase video lookup failed: ${bySource.error.message}`);
-  return bySource.data?.id || null;
+    const bySource = await base.eq(settings.videosSourceColumn, videoUrl).maybeSingle();
+    if (bySource.error) throw new Error(formatSupabaseErrorMessage(bySource.error, "Supabase video lookup"));
+    return bySource.data?.id || null;
+  } catch (err) {
+    throw new Error(formatSupabaseErrorMessage(err, "Supabase video lookup"));
+  }
 }
 
 export async function fetchSegmentsForVideo(videoUrl, { allowEmpty = false } = {}) {
@@ -318,73 +340,85 @@ export async function fetchSegmentsForVideo(videoUrl, { allowEmpty = false } = {
     throw new Error("No matching video record found in transcript.videos for this URL.");
   }
 
-  const query = supabase
-    .schema(settings.transcriptSchema)
-    .from(settings.transcriptTable)
-    .select("*")
-    .eq(settings.transcriptVideoIdColumn, videoId)
-    .order(settings.transcriptOrderColumn, { ascending: true });
+  try {
+    const query = supabase
+      .schema(settings.transcriptSchema)
+      .from(settings.transcriptTable)
+      .select("*")
+      .eq(settings.transcriptVideoIdColumn, videoId)
+      .order(settings.transcriptOrderColumn, { ascending: true });
 
-  const { data, error } = await query;
-  if (error) {
-    throw new Error(`Supabase query failed: ${error.message}`);
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(formatSupabaseErrorMessage(error, "Supabase query"));
+    }
+
+    const mapped = (data || []).map(mapSegment).filter(Boolean);
+    if (!mapped.length) {
+      if (allowEmpty) return [];
+      throw new Error("No transcript segments were found for this video URL.");
+    }
+
+    return mapped.sort((a, b) => a.segmentNumber - b.segmentNumber);
+  } catch (err) {
+    throw new Error(formatSupabaseErrorMessage(err, "Supabase query"));
   }
-
-  const mapped = (data || []).map(mapSegment).filter(Boolean);
-  if (!mapped.length) {
-    if (allowEmpty) return [];
-    throw new Error("No transcript segments were found for this video URL.");
-  }
-
-  return mapped.sort((a, b) => a.segmentNumber - b.segmentNumber);
 }
 
 export async function fetchSegmentsForVideoId(videoId, { allowEmpty = false } = {}) {
   if (!supabase) throw new Error("Supabase client is not configured.");
   if (!videoId) throw new Error("video_id is required.");
 
-  const query = supabase
-    .schema(settings.transcriptSchema)
-    .from(settings.transcriptTable)
-    .select("*")
-    .eq(settings.transcriptVideoIdColumn, videoId)
-    .order(settings.transcriptOrderColumn, { ascending: true });
+  try {
+    const query = supabase
+      .schema(settings.transcriptSchema)
+      .from(settings.transcriptTable)
+      .select("*")
+      .eq(settings.transcriptVideoIdColumn, videoId)
+      .order(settings.transcriptOrderColumn, { ascending: true });
 
-  const { data, error } = await query;
-  if (error) {
-    throw new Error(`Supabase query failed: ${error.message}`);
-  }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(formatSupabaseErrorMessage(error, "Supabase query"));
+    }
 
-  const mapped = (data || []).map(mapSegment).filter(Boolean);
-  if (!mapped.length && !allowEmpty) {
-    throw new Error("No transcript segments were found for this video.");
+    const mapped = (data || []).map(mapSegment).filter(Boolean);
+    if (!mapped.length && !allowEmpty) {
+      throw new Error("No transcript segments were found for this video.");
+    }
+    return mapped.sort((a, b) => a.segmentNumber - b.segmentNumber);
+  } catch (err) {
+    throw new Error(formatSupabaseErrorMessage(err, "Supabase query"));
   }
-  return mapped.sort((a, b) => a.segmentNumber - b.segmentNumber);
 }
 
 export async function fetchVideosFeed({ limit = 60 } = {}) {
   if (!supabase) throw new Error("Supabase client is not configured.");
 
-  let query = supabase.schema(settings.transcriptSchema).from(settings.videosTable).select("*").limit(limit);
-  let { data, error } = await query.order("created_at", { ascending: false });
+  try {
+    let query = supabase.schema(settings.transcriptSchema).from(settings.videosTable).select("*").limit(limit);
+    let { data, error } = await query.order("created_at", { ascending: false });
 
-  if (error && /column .*created_at/i.test(error.message || "")) {
-    const fallback = await supabase
-      .schema(settings.transcriptSchema)
-      .from(settings.videosTable)
-      .select("*")
-      .limit(limit);
-    data = fallback.data;
-    error = fallback.error;
+    if (error && /column .*created_at/i.test(error.message || "")) {
+      const fallback = await supabase
+        .schema(settings.transcriptSchema)
+        .from(settings.videosTable)
+        .select("*")
+        .limit(limit);
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error) {
+      throw new Error(formatSupabaseErrorMessage(error, "Supabase videos query"));
+    }
+
+    return (data || [])
+      .map(mapVideoRow)
+      .filter((video) => video.id);
+  } catch (err) {
+    throw new Error(formatSupabaseErrorMessage(err, "Supabase videos query"));
   }
-
-  if (error) {
-    throw new Error(`Supabase videos query failed: ${error.message}`);
-  }
-
-  return (data || [])
-    .map(mapVideoRow)
-    .filter((video) => video.id);
 }
 
 export async function waitForSegments(videoUrl) {
