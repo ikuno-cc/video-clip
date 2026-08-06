@@ -7,7 +7,8 @@ import {
 
 const TRIM_WEBHOOK_URL =
   import.meta.env.VITE_TRIM_WEBHOOK_URL ||
-  "https://n8n-m4wwkkco4sogkkg0gk0k8og8.20.55.33.27.sslip.io/webhook/video-trim";
+  import.meta.env.VITE_WORKFLOW_URL ||
+  "https://n8n-kuno.169.58.4.250.sslip.io/webhook/video-trim";
 
 function getYoutubeVideoId(url) {
   if (!url) return "";
@@ -366,15 +367,13 @@ function App() {
   useEffect(() => {
     if (!selectedVideo) return;
     const embedSource = String(selectedVideo.rawUrl || selectedVideo.playableUrl || "").trim();
-    const youtubeUrl = getYoutubeEmbedUrl(embedSource) ? embedSource : "";
     const nextRequestId = generateRequestId();
     setTrimForm({
       video_id: String(selectedVideo.id || ""),
       request_id: nextRequestId,
       segment_number: "1",
       selected_text: "",
-      status: "running",
-      youtube_url: youtubeUrl,
+      youtube_url: embedSource,
       selection_scope: "segment",
     });
     setTrimError("");
@@ -508,18 +507,21 @@ function App() {
     setTrimResult(null);
 
     try {
+      const rawYoutubeUrl = String(
+        selectedVideo?.rawUrl || selectedVideo?.playableUrl || trimForm.youtube_url || ""
+      ).trim();
+
       const payload = {
         video_id: videoId,
         request_id: requestId,
         selected_text: selectedText,
-        status: String(trimForm.status || "running"),
-        youtube_url: String(trimForm.youtube_url || "").trim(),
+        youtube_url: rawYoutubeUrl,
         selection_scope: isFullTranscriptSelection
           ? "full_transcript"
           : String(trimForm.selection_scope || "segment"),
         output_format: "json",
       };
-      if (!isFullTranscriptSelection) {
+      if (!isFullTranscriptSelection && Number.isFinite(segmentNumberValue) && segmentNumberValue > 0) {
         payload.segment_number = segmentNumberValue;
       }
 
