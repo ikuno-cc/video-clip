@@ -311,6 +311,7 @@ function App() {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [segments, setSegments] = useState([]);
   const [videoClips, setVideoClips] = useState([]);
+  const [failedClips, setFailedClips] = useState({});
   const [detailSubTab, setDetailSubTab] = useState("overview"); // 'overview' | 'clips'
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all"); // 'all' | 'shorts' | 'standard'
@@ -904,13 +905,21 @@ function App() {
                         </span>
                       </div>
 
-                      {clip.clipPath ? (
+                      {clip.clipPath && !failedClips[clip.id] ? (
                         <video
                           className="clip-player"
                           src={clip.clipPath}
                           controls
                           preload="metadata"
+                          onError={() => setFailedClips((prev) => ({ ...prev, [clip.id]: true }))}
                         />
+                      ) : clip.clipPath ? (
+                        <div className="error-alert" style={{ padding: "0.85rem 1rem", fontSize: "0.82rem", borderRadius: "12px", background: "rgba(244, 63, 94, 0.12)", borderColor: "rgba(244, 63, 94, 0.25)" }}>
+                          ⚠️ <strong>Playback Error (403 Forbidden):</strong>
+                          <div style={{ marginTop: "0.35rem", opacity: 0.9 }}>
+                            Cloudflare R2 bucket access is restricted for this URL. Ensure public access or signed URLs are enabled on R2.
+                          </div>
+                        </div>
                       ) : (
                         <div className="empty-box" style={{ padding: "1.5rem" }}>
                           No video file available for this clip
